@@ -14,7 +14,7 @@ use nom::{
 use std::str::FromStr;
 use tui::{
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Line, Span, Text},
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -77,7 +77,7 @@ impl From<AnsiStates> for tui::style::Style {
 pub(crate) fn text(mut s: &[u8]) -> IResult<&[u8], Text<'static>> {
     let mut line_spans = Vec::new();
     let mut last = Default::default();
-    while let Ok((_s, (spans, style))) = spans(last)(s) {
+    while let Ok((_s, (spans, style))) = inner_spans(last)(s) {
         line_spans.push(spans);
         last = style;
         s = _s;
@@ -88,14 +88,23 @@ pub(crate) fn text(mut s: &[u8]) -> IResult<&[u8], Text<'static>> {
     Ok((s, Text::from(line_spans)))
 }
 
-fn spans(style: Style) -> impl Fn(&[u8]) -> IResult<&[u8], (Spans<'static>, Style)> {
+pub(crate) fn line(s: &[u8]) -> IResult<&[u8], Line<'static>> {
+    let last = Default::default();
+    if let Ok((_s, (spans, _style))) = inner_spans(last)(s) {
+        Ok((s, spans))
+    } else {
+        unreachable!()
+    }
+}
+
+fn inner_spans(style: Style) -> impl Fn(&[u8]) -> IResult<&[u8], (Line<'static>, Style)> {
     // let style_: Style = Default::default();
-    move |s: &[u8]| -> IResult<&[u8], (Spans<'static>, Style)> {
+    move |s: &[u8]| -> IResult<&[u8], (Line<'static>, Style)> {
         let (s, mut text) = take_while(|c| c != b'\n')(s)?;
         let (s, _) = opt(tag("\n"))(s)?;
         let mut spans = Vec::new();
         let mut last = style;
-        while let Ok((s, span)) = span(last)(text) {
+        while let Ok((s, span)) = inner_span(last)(text) {
             if span.style == Style::default() && span.content.is_empty() {
                 // Reset styles
                 last = Style::default();
@@ -112,12 +121,13 @@ fn spans(style: Style) -> impl Fn(&[u8]) -> IResult<&[u8], (Spans<'static>, Styl
             }
         }
 
-        Ok((s, (Spans(spans), last)))
+        Ok((s, (Line { spans }, last)))
     }
 }
 
-// fn span(s: &[u8]) -> IResult<&[u8], tui::text::Span> {
-fn span(last: Style) -> impl Fn(&[u8]) -> IResult<&[u8], Span<'static>, nom::error::Error<&[u8]>> {
+pub(crate) fn inner_span(
+    last: Style,
+) -> impl Fn(&[u8]) -> IResult<&[u8], Span<'static>, nom::error::Error<&[u8]>> {
     move |s: &[u8]| -> IResult<&[u8], Span<'static>> {
         let mut last = last;
         let (s, style) = opt(style(last))(s)?;
@@ -179,7 +189,7 @@ fn any_escape_sequence(s: &[u8]) -> IResult<&[u8], Option<&[u8]>> {
     preceded(
         char('\x1b'),
         opt(alt((
-            delimited(char('['), take_till(|c| is_alphabetic(c)), opt(take(1u8))),
+            delimited(char('['), take_till(is_alphabetic), opt(take(1u8))),
             delimited(char(']'), take_till(|c| c == b'\x07'), opt(take(1u8))),
         ))),
     )(s)
